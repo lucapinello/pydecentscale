@@ -217,7 +217,7 @@ class DecentScale(AsyncioEventLoopThread):
         else:
             print('Already disconnected.')
         
-        return self.connected
+        return not self.connected
             
     def auto_connect(self,n_retries=3):    
         address = None
