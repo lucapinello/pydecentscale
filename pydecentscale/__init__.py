@@ -3,7 +3,7 @@
 # Copyright (c) 2021 Luca Pinello
 # Released under GPLv3
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 
 import asyncio
@@ -32,7 +32,7 @@ class AsyncioEventLoopThread(threading.Thread):
 
     def stop(self):
         self.loop.call_soon_threadsafe(self.loop.stop)
-        #self.join()
+        self.join()
         self.running = False
 
 
@@ -66,6 +66,7 @@ class DecentScale(AsyncioEventLoopThread):
         self.stop_time_command=bytearray.fromhex("030B0000000008")
         self.reset_time_command=bytearray.fromhex("030B020000000A" )
         
+        self.daemon=True
         super().start()
         
     def check_connection(func):

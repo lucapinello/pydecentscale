@@ -6,8 +6,6 @@
 
 from pydecentscale import DecentScale
 import asyncio
-import nest_asyncio
-nest_asyncio.apply()
 import time
 
 
@@ -135,8 +133,6 @@ ds.disconnect()
 
 print('All done. Ciao!')
 
-
-# In[ ]:
 
 
 
