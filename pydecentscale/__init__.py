@@ -13,6 +13,7 @@ import operator
 import threading
 import time
 from itertools import cycle
+import sys
 
 from bleak import BleakScanner, BleakClient
 
@@ -152,9 +153,11 @@ class DecentScale(AsyncioEventLoopThread):
         if xor_msg != data[-1]:
             logger.warning("XOR verification failed for notification")
             return
-
-        logger.debug(f"Received Notification at {time.time()}: {binascii.hexlify(data, sep=':')}")
-
+        if sys.version_info >= (3, 8):
+            logger.debug(f"Received Notification at {time.time()}: {binascii.hexlify(data, sep=':')}")
+        else:
+            logger.debug(f"Received Notification at {time.time()}: {binascii.hexlify(data)}")
+        
         # Have to decide by type of the package
         type_ = data[1]
 
