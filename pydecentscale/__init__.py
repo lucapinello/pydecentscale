@@ -7,25 +7,50 @@ __version__ = "0.1.0"
 
 
 import asyncio
-import nest_asyncio
-nest_asyncio.apply()
+import threading
+from threading import Thread
 from itertools import cycle
 from bleak import BleakScanner,BleakClient
 
 
-class DecentScale:
-    def __init__(self,timeout=20, fix_dropped_command=True):
+class AsyncioEventLoopThread(threading.Thread):
+    def __init__(self, *args, loop=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.loop = asyncio.new_event_loop()
+        self.running = False
+
+    def run(self):
+        self.running = True
+        self.loop.run_forever()
+
+    def run_coro(self, coro,wait_for_result=True):
+        
+        if wait_for_result:
+            return asyncio.run_coroutine_threadsafe(coro, loop=self.loop).result()
+        else:
+            return asyncio.run_coroutine_threadsafe(coro, loop=self.loop)
+
+    def stop(self):
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        #self.join()
+        self.running = False
+
+
+class DecentScale(AsyncioEventLoopThread):
+    
+    def __init__(self, *args, timeout=20, fix_dropped_command=True, **kwargs):
+        super().__init__(*args, **kwargs)
+
         self.client = None
         self.timeout=timeout
         self.connected=False
-        self.weight=None
         self.fix_dropped_command=fix_dropped_command
-        self.loop = asyncio.get_event_loop()
+        self.weight = None   
+
          
         #Constants
         self.CHAR_READ='0000FFF4-0000-1000-8000-00805F9B34FB'
         self.CHAR_WRITE='000036f5-0000-1000-8000-00805f9b34fb'
-        
         
         
         #Tare the scale by sending "030FFD000000F1". 
@@ -41,7 +66,16 @@ class DecentScale:
         self.stop_time_command=bytearray.fromhex("030B0000000008")
         self.reset_time_command=bytearray.fromhex("030B020000000A" )
         
+        super().start()
         
+    def check_connection(func):
+        def is_connected(self):
+            if self.connected:
+                func(self)
+            else:
+                print("Scale is not connected.")
+        return is_connected
+
     async def _find_address(self):
         
         device = await BleakScanner.find_device_by_filter(
@@ -58,19 +92,21 @@ class DecentScale:
         
         self.client = BleakClient(address)
         
+        if not self.running:
+            super().start()
+        
         try:
-            await self.client.connect(timeout=self.timeout)
+            return await self.client.connect(timeout=self.timeout)
         except Exception as e:
             print('Error:%s\nTrying again...' %e)
             return False   
         
-        return True
-
                   
     async def _disconnect(self):
-        await self.client.disconnect()
-        
+        return await self.client.disconnect()   
+    
 
+    
     async def _tare(self):
 
         await self.client.write_gatt_char(self.CHAR_WRITE,next(self.tare_commands))
@@ -118,51 +154,52 @@ class DecentScale:
         if self.fix_dropped_command:
             await asyncio.sleep(0.2)
             await self.client.write_gatt_char(self.CHAR_WRITE,self.reset_time_command)
-        
-    async def _enable_notification(self):
-       
-        await self.client.start_notify(self.CHAR_READ, self.notification_handler)
+  
 
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.start_notify(self.CHAR_READ, self.notification_handler)
-
-        while(True):
-            await asyncio.sleep(1.0)
-            
-    async def _disable_notification(self):
-        await self.client.stop_notify(self.CHAR_READ) 
-
-        
     def notification_handler(self,sender, data):
         self.weight=int.from_bytes(data[2:4], byteorder='big', signed=True)/10
 
+    async def _enable_notification(self):
+        await self.client.start_notify(self.CHAR_READ, self.notification_handler)
+        await asyncio.sleep(1)
+        
+             
+    async def _disable_notification(self):
+        await self.client.stop_notify(self.CHAR_READ) 
+
+    @check_connection    
+    def enable_notification(self):   
+        return self.run_coro(self._enable_notification())
     
-    def connect(self,address=None):
+    @check_connection 
+    def disable_notification(self):   
+        self.weight=None
+        return self.run_coro(self._disable_notification())
+ 
+    def find_address(self):   
+        return self.run_coro(self._find_address())
+
+    
+    def connect(self,address):
         if not self.connected:
-            if self.loop.run_until_complete(self._connect(address)):
-                self.connected=True
-                
-        return self.connected    
+            self.connected= self.run_coro(self._connect(address))
+            
+            if self.connected:
+                self.led_off()
+                self.led_on()
+        else:
+            print('Already connected.')
     
+        return self.connected
+                
     def disconnect(self):
         if self.connected:
-            self.loop.run_until_complete(self._disconnect())
-            self.connected=False
-  
-
-    def enable_notification(self):   
-        asyncio.run_coroutine_threadsafe(self._enable_notification(), loop=self.loop)
+            self.connected= not self.run_coro(self._disconnect())
+        else:
+            print('Already disconnected.')
         
-    
-    def disable_notification(self):   
-        self.loop.run_until_complete(self._disable_notification())
-        
-    
-    def find_address(self):   
-        return self.loop.run_until_complete(self._find_address())
-    
-    
+        return self.connected
+            
     def auto_connect(self,n_retries=3):    
               
         for i in range(n_retries):
@@ -174,29 +211,39 @@ class DecentScale:
                 print(i)
         
         if address:        
-
             for i in range(n_retries):
                 if self.connect(address):
+                    print('Scale connected!')
                     return True
+                
         
+        print('Autoconnect failed. Make sure the scale is on.')
         return False
     
+    @check_connection 
     def tare(self):   
-        self.loop.run_until_complete(self._tare())
+        self.run_coro(self._tare())
         
+    @check_connection 
     def start_time(self):   
-        self.loop.run_until_complete(self._start_time())
+        self.run_coro(self._start_time())
     
+    @check_connection 
     def stop_time(self):   
-        self.loop.run_until_complete(self._stop_time())
+        self.run_coro(self._stop_time())
                    
+    @check_connection 
     def reset_time(self):   
-        self.loop.run_until_complete(self._reset_time())
+        self.run_coro(self._reset_time())
 
+    @check_connection 
     def led_off(self):   
-        self.loop.run_until_complete(self._led_off())
+        self.run_coro(self._led_off())
                    
+    @check_connection 
     def led_on(self):   
-        self.loop.run_until_complete(self._led_on())
+        self.run_coro(self._led_on())
+ 
+
         
 
