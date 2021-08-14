@@ -5,12 +5,18 @@
 
 __version__ = "0.1.0"
 
-
 import asyncio
+import binascii
+import functools
+import logging
+import operator
 import threading
-from threading import Thread
+import time
 from itertools import cycle
-from bleak import BleakScanner,BleakClient
+
+from bleak import BleakScanner, BleakClient
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncioEventLoopThread(threading.Thread):
@@ -45,6 +51,7 @@ class DecentScale(AsyncioEventLoopThread):
         self.timeout=timeout
         self.connected=False
         self.fix_dropped_command=fix_dropped_command
+        self.dropped_command_sleep = 0.05  # API Docs says 50ms
         self.weight = None   
 
          
@@ -101,63 +108,74 @@ class DecentScale(AsyncioEventLoopThread):
             print('Error:%s\nTrying again...' %e)
             return False   
         
-                  
     async def _disconnect(self):
         return await self.client.disconnect()   
-    
 
-    
+    async def __send(self, cmd):
+        """Send commands with firmware v1.0 bugfix (resending)"""
+        await self.client.write_gatt_char(self.CHAR_WRITE, cmd)
+        if self.fix_dropped_command:
+            await asyncio.sleep(self.dropped_command_sleep)
+            await self.client.write_gatt_char(self.CHAR_WRITE, cmd)
+
+        # Wait 200ms for the command to finish
+        # Alternative: receive the notifications and check if the command was acknowledged
+        await asyncio.sleep(0.2)
+
     async def _tare(self):
+        await self.__send(next(self.tare_commands))
 
-        await self.client.write_gatt_char(self.CHAR_WRITE,next(self.tare_commands))
-        
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,next(self.tare_commands))
-
-  
     async def _led_on(self):
-        await self.client.write_gatt_char(self.CHAR_WRITE,self.led_on_command)
-        
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,self.led_on_command)
-
+        await self.__send(self.led_on_command)
 
     async def _led_off(self):
-        await self.client.write_gatt_char(self.CHAR_WRITE,self.led_off_command)
-        
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,self.led_off_command)
-        
-  
+        await self.__send(self.led_off_command)
+
     async def _start_time(self):
-        await self.client.write_gatt_char(self.CHAR_WRITE,self.start_time_command)
-        
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,self.start_time_command)
-        
+        await self.__send(self.start_time_command)
 
     async def _stop_time(self):
-        await self.client.write_gatt_char(self.CHAR_WRITE,self.stop_time_command)
-       
-        if self.fix_dropped_command:        
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,self.stop_time_command)
-        
-    
-    async def _reset_time(self):
-        await self.client.write_gatt_char(self.CHAR_WRITE,self.reset_time_command)
-        
-        if self.fix_dropped_command:
-            await asyncio.sleep(0.2)
-            await self.client.write_gatt_char(self.CHAR_WRITE,self.reset_time_command)
-  
+        await self.__send(self.stop_time_command)
 
-    def notification_handler(self,sender, data):
-        self.weight=int.from_bytes(data[2:4], byteorder='big', signed=True)/10
+    async def _reset_time(self):
+        await self.__send(self.reset_time_command)
+
+    def notification_handler(self, sender, data):
+        if data[0] != 0x03 or len(data) != 7:
+            # Basic sanity check
+            logger.info("Invalid notification: not a Decent Scale?")
+            return
+
+        # Calculate XOR
+        xor_msg = functools.reduce(operator.xor, data[:-1])
+        if xor_msg != data[-1]:
+            logger.warning("XOR verification failed for notification")
+            return
+
+        logger.debug(f"Received Notification at {time.time()}: {binascii.hexlify(data, sep=':')}")
+
+        # Have to decide by type of the package
+        type_ = data[1]
+
+        if type_ in [0xCA, 0xCE]:
+            # Weight information
+            self.weight = int.from_bytes(data[2:4], byteorder='big', signed=True) / 10
+        elif type_ == 0xAA:
+            # Button press
+            # NOTE: Despite the API documentation saying the XOR field is 0x00, it actually contains the XOR
+            logger.debug(f"Button press: {data[2]}, duration: {data[3]}")
+        elif type_ == 0x0F:
+            # tare increment
+            pass
+        elif type_ == 0x0A:
+            # LED on/off -> returns units and battery level
+            logger.debug(f"Unit of scale: {'g' if data[3] == 0 else 'oz'}, battery level: {data[4]}%")
+        elif type_ == 0x0B:
+            # Timer
+            # NOTE: The API documentation says there is a section on "Receiving Timer Info" but this is missing
+            pass
+        else:
+            logger.warning(f"Unknown Notification Type received: 0x{type_:02x}")
 
     async def _enable_notification(self):
         await self.client.start_notify(self.CHAR_READ, self.notification_handler)
@@ -201,7 +219,8 @@ class DecentScale(AsyncioEventLoopThread):
         return self.connected
             
     def auto_connect(self,n_retries=3):    
-              
+        address = None
+
         for i in range(n_retries):
             address=self.find_address()
             if address:
