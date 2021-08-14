@@ -48,7 +48,7 @@ time.sleep(1)
 print('Reading values...')
 for i in range(50):
     if ds.weight:
-        print('current weight:%.1f' % ds.weight, end='\r')
+        print('Current weight:%.1f' % ds.weight, end='\r')
     asyncio.run( asyncio.sleep(0.1))
 
 
