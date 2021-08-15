@@ -3,7 +3,7 @@
 # Copyright (c) 2021 Luca Pinello
 # Released under GPLv3
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 import asyncio
 import binascii
