@@ -1,13 +1,3 @@
-# pydecentscale
-
-Python module to interact with the Decent Scale scales (https://decentespresso.com/scale) via Bluetooth (BLE).
-
-Big thanks to **John Buckman** from Decent for sending a free scale to develop this library!
-
-## TLDR
-----
-
-```
 import time
 from pydecentscale import DecentScale
 
@@ -35,14 +25,3 @@ time.sleep(50)
 print('Disconnecting...')
 ds.remove_weight_callback(on_weight_change)  # Optionally remove our callback (will be removed in disconnect function)
 ds.disconnect()
-````
-
-An illustrative example with all the available functions is provided in /examples as Python script or interactive [Jupyter Notebook](https://nbviewer.jupyter.org/github/lucapinello/pydecentscale/blob/main/examples/Test_Scale.ipynb)
-
-Enjoy!
-
-
-
-
-
-

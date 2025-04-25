@@ -54,8 +54,11 @@ class DecentScale(AsyncioEventLoopThread):
         self.fix_dropped_command=fix_dropped_command
         self.dropped_command_sleep = 0.05  # API Docs says 50ms
         self.weight = None   
+        self.timestamp_in_seconds = None
 
-         
+        # Callbacks
+        self.weight_callbacks = []
+
         #Constants
         self.CHAR_READ='0000FFF4-0000-1000-8000-00805F9B34FB'
         self.CHAR_WRITE='000036f5-0000-1000-8000-00805f9b34fb'
@@ -76,7 +79,34 @@ class DecentScale(AsyncioEventLoopThread):
         
         self.daemon=True
         super().start()
-        
+
+    def add_weight_callback(self, callback):
+        """
+        Add a callback function that will be called when new weight data is received.
+        The callback should accept two arguments: weight and timestamp
+
+        Example usage:
+            def on_weight_change(weight, timestamp):
+                print(f"New weight: {weight} at {timestamp}")
+
+            ds.add_weight_callback(on_weight_change)
+        """
+        if callable(callback) and callback not in self.weight_callbacks:
+            self.weight_callbacks.append(callback)
+            return True
+        return False
+
+    def remove_weight_callback(self, callback):
+        """
+        Remove a previously added callback function.
+
+        Returns True if the callback was found and removed, False otherwise.
+        """
+        if callback in self.weight_callbacks:
+            self.weight_callbacks.remove(callback)
+            return True
+        return False
+
     def check_connection(func):
         def is_connected(self):
             if self.connected:
@@ -143,7 +173,7 @@ class DecentScale(AsyncioEventLoopThread):
         await self.__send(self.reset_time_command)
 
     def notification_handler(self, sender, data):
-        if data[0] != 0x03 or len(data) != 7:
+        if data[0] != 0x03 or len(data) != 10:
             # Basic sanity check
             logger.info("Invalid notification: not a Decent Scale?")
             return
@@ -164,6 +194,14 @@ class DecentScale(AsyncioEventLoopThread):
         if type_ in [0xCA, 0xCE]:
             # Weight information
             self.weight = int.from_bytes(data[2:4], byteorder='big', signed=True) / 10
+            self.timestamp_in_seconds = data[4] * 60 + data[5] + data[6] / 10
+
+            # Notify all callbacks about the new weight and timestamp
+            for callback in self.weight_callbacks:
+                try:
+                    callback(self.weight, self.timestamp_in_seconds)
+                except Exception as e:
+                    logger.error(f"Error in weight callback: {e}")
         elif type_ == 0xAA:
             # Button press
             # NOTE: Despite the API documentation saying the XOR field is 0x00, it actually contains the XOR
@@ -215,6 +253,7 @@ class DecentScale(AsyncioEventLoopThread):
         return self.connected
                 
     def disconnect(self):
+        self.weight_callbacks = []
         if self.connected:
             self.connected= not self.run_coro(self._disconnect())
         else:
