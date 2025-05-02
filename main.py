@@ -3,8 +3,8 @@ from pydecentscale import DecentScale
 
 
 # Define your callback function
-def on_weight_change(weight, ts):
-    print(f"New weight received: {weight:.1f}g at {ts}s")
+def on_weight_change(weight, ts, stable):
+    print(f"New weight received: {weight:.1f}g at {ts}s, stable: {stable}")
 
 
 # Create the DecentScale object

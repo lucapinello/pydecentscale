@@ -53,8 +53,6 @@ class DecentScale(AsyncioEventLoopThread):
         self.connected=False
         self.fix_dropped_command=fix_dropped_command
         self.dropped_command_sleep = 0.05  # API Docs says 50ms
-        self.weight = None   
-        self.timestamp_in_seconds = None
 
         # Callbacks
         self.weight_callbacks = []
@@ -173,6 +171,7 @@ class DecentScale(AsyncioEventLoopThread):
         await self.__send(self.reset_time_command)
 
     def notification_handler(self, sender, data):
+        # based on https://github.com/lucapinello/pydecentscale/issues/3
         if data[0] != 0x03 or len(data) != 10:
             # Basic sanity check
             logger.info("Invalid notification: not a Decent Scale?")
@@ -193,13 +192,14 @@ class DecentScale(AsyncioEventLoopThread):
 
         if type_ in [0xCA, 0xCE]:
             # Weight information
-            self.weight = int.from_bytes(data[2:4], byteorder='big', signed=True) / 10
-            self.timestamp_in_seconds = data[4] * 60 + data[5] + data[6] / 10
+            weight = int.from_bytes(data[2:4], byteorder='big', signed=True) / 10
+            timestamp_in_seconds = data[4] * 60 + data[5] + data[6] / 10
+            stable = type_ == 0xCE
 
             # Notify all callbacks about the new weight and timestamp
             for callback in self.weight_callbacks:
                 try:
-                    callback(self.weight, self.timestamp_in_seconds)
+                    callback(weight, timestamp_in_seconds, stable)
                 except Exception as e:
                     logger.error(f"Error in weight callback: {e}")
         elif type_ == 0xAA:
