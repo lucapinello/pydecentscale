@@ -19,6 +19,13 @@ from bleak import BleakScanner, BleakClient
 
 logger = logging.getLogger(__name__)
 
+# define firmware constants
+FIRMWARE_V1_1 = "v1.1"
+FIRMWARE_V1_2 = "v1.2"
+
+# Define constants for firmware data lengths
+FIRMWARE_V1_2_LENGTH = 10
+FIRMWARE_V1_1_LENGTH = 7
 
 class AsyncioEventLoopThread(threading.Thread):
     def __init__(self, *args, loop=None, **kwargs):
@@ -177,6 +184,16 @@ class DecentScale(AsyncioEventLoopThread):
             logger.info("Invalid notification: not a Decent Scale?")
             return
 
+        # Check the data length and determine firmware version
+        if len(data) == FIRMWARE_V1_2_LENGTH:
+            firmware_version = FIRMWARE_V1_2
+        elif len(data) == FIRMWARE_V1_1_LENGTH:
+            firmware_version = FIRMWARE_V1_1
+        else:
+            logger.info(
+                f"Unknown data length received: {len(data)}. Expected {FIRMWARE_V1_1_LENGTH} or {FIRMWARE_V1_2_LENGTH}.")
+            return
+
         # Calculate XOR
         xor_msg = functools.reduce(operator.xor, data[:-1])
         if xor_msg != data[-1]:
@@ -193,8 +210,10 @@ class DecentScale(AsyncioEventLoopThread):
         if type_ in [0xCA, 0xCE]:
             # Weight information
             weight = int.from_bytes(data[2:4], byteorder='big', signed=True) / 10
-            timestamp_in_seconds = data[4] * 60 + data[5] + data[6] / 10
             stable = type_ == 0xCE
+            timestamp_in_seconds = None
+            if firmware_version == FIRMWARE_V1_2:
+                timestamp_in_seconds = data[4] * 60 + data[5] + data[6] / 10
 
             # Notify all callbacks about the new weight and timestamp
             for callback in self.weight_callbacks:
