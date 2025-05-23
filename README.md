@@ -7,7 +7,13 @@ Big thanks to **John Buckman** from Decent for sending a free scale to develop t
 ## TLDR
 ----
 
+```shell
+uv sync
+source .venv/bin/activate
+python main.py
 ```
+
+```python
 import time
 from pydecentscale import DecentScale
 

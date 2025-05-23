@@ -1,0 +1,11 @@
+[project]
+name = "pydecentscale"
+version = "0.1.0"
+description = "A Python module to interact with the Decent Scale via bluetooth (BLE)"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "asyncio>=3.4.3",
+    "bleak>=0.22.3",
+    "nest-asyncio>=1.6.0",
+]
