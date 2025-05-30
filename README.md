@@ -4,6 +4,8 @@ Python module to interact with the Decent Scale scales (https://decentespresso.c
 
 Big thanks to **John Buckman** from Decent for sending a free scale to develop this library!
 
+Also thanks to @mithornhill for contributing code for the new firnware!
+
 ## Version 0.4.0 - Firmware v2 Compatibility Update
 
 This version adds support for new Decent Scale firmware versions (v1.1, v1.2+) and the Half Decent Scale model while maintaining backward compatibility with firmware v1.0.
