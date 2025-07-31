@@ -4,7 +4,15 @@
 
 from pydecentscale import DecentScale
 import time
+import logging
+import sys
 
+# Configure logging to see detailed output from the pydecentscale library
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
 
 # Create the DecentScale object with heartbeat enabled
 # The Half Decent Scale requires a heartbeat every 5 seconds
@@ -12,15 +20,12 @@ print('Creating DecentScale object with heartbeat support...')
 ds = DecentScale(enable_heartbeat=True)
 
 
-# Connect to the scale
+# Connect to the scale. The connect() method now handles enabling notifications.
 print('Connecting to Half Decent Scale...')
 if ds.auto_connect():
     
+    # The connection is now established, and notifications (including the heartbeat) are active.
     print(f'Connected! Firmware: {ds.get_firmware_version()}')
-    
-    # Enable notifications - this will also start the heartbeat loop
-    print('\nEnabling notifications (heartbeat will start automatically)...')
-    ds.enable_notification()
     
     # The heartbeat is now being sent automatically every 4 seconds
     # to ensure we stay within the 5-second requirement
@@ -43,6 +48,8 @@ if ds.auto_connect():
     ds.tare()
     time.sleep(2)
     
+    # Disabling notifications is still useful if you want to stop receiving data
+    # but stay connected. It will also stop the heartbeat.
     print('\nDisabling notifications (heartbeat will stop)...')
     ds.disable_notification()
     
