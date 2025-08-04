@@ -134,3 +134,10 @@ dmypy.json
 .idea/modules.xml
 .idea/vcs.xml
 .idea/inspectionProfiles/profiles_settings.xml
+examples/webusb_app/webserialpageO.html
+examples/webusb_app/scale_usb.py
+examples/webusb_app/app.py
+examples/webusb_app/webserialdemo.py
+examples/webusb_app/webserialdemoO.py
+examples/webusb_app/webserialpage.html
+examples/webusb_app/templates/index.html
