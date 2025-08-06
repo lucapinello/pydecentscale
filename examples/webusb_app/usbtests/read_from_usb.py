@@ -75,83 +75,108 @@ def main():
 
             # Per your request, send the "Enable Weight via USB" command.
             # The full 7-byte command is 03 20 01 00 00 00 22 (with XOR checksum)
-            enable_weight_command = bytearray.fromhex('03200100000022')
+            enable_weight_command = bytearray.fromhex('03 20 01')
             print(f"Sending 'Enable Weight' command: {enable_weight_command.hex(' ')}")
             dev.write(ep_out.bEndpointAddress, enable_weight_command)
             print("'Enable Weight' command sent successfully.")
 
         except usb.core.USBError as e:
             print(f"Error sending command: {e}")
-
-        print(f"\nReading data from IN endpoint 0x{ep_in.bEndpointAddress:02x} for 10 seconds...")
+        monitor_time = 5 #seconds
+        print(f"\nReading data from IN endpoint 0x{ep_in.bEndpointAddress:02x} for {monitor_time} seconds...")
         print("-" * 40)
 
         data_buffer = bytearray()
-        logging.info('data buffer1:%s',data_buffer)
+        protocol_mode = None  # Can be 'text', 'binary', or None
         start_time = time.time()
         last_command_time = time.time()
-        while time.time() - start_time < 10:
+        
+        while time.time() - start_time < monitor_time:  # Increased runtime for better detection
             try:
-                # The device seems to stop sending data, so we will periodically ask for it again.
-                # This acts as a "keep-alive" by re-sending the enable weight command.
                 if time.time() - last_command_time > 2:
                     try:
                         print("Sending 'Enable Weight' keep-alive command...")
                         dev.write(ep_out.bEndpointAddress, enable_weight_command)
                         last_command_time = time.time()
                     except usb.core.USBError as e:
-                        print(f"Error sending keep-alive command: {e}")
+                        logging.error(f"Error sending keep-alive command: {e}")
                         break
 
                 data = dev.read(ep_in.bEndpointAddress, ep_in.wMaxPacketSize, timeout=1000)
-                if data:
-                    data_buffer.extend(data.tobytes())
-                    print("data", data)
-                    logging.info('data buffer: %s', data_buffer.hex())
-                    logging.info('data buffer: %s', data_buffer)
-                # Process the buffer to find and parse valid packets.
-                while len(data_buffer) >= 7:
-                    # Find the start of a packet (0x03)
-                    start_index = data_buffer.find(0x03)
-                    if start_index == -1:
-                        data_buffer.clear() # No start byte, clear buffer
-                        break
+                if not data:
+                    continue
 
-                    # Discard any garbage data before the packet
-                    if start_index > 0:
-                        data_buffer = data_buffer[start_index:]
+                data_buffer.extend(data.tobytes())
 
-                    # If we don't have a full packet after slicing, wait for more data
-                    if len(data_buffer) < 7:
-                        break
+                # --- Protocol Detection ---
+                if protocol_mode is None:
+                    if b"Weight:" in data_buffer:
+                        logging.info("Detected TEXT protocol.")
+                        protocol_mode = 'text'
+                    elif b'\x03' in data_buffer:
+                        logging.info("Detected BINARY protocol.")
+                        protocol_mode = 'binary'
 
-                    packet = data_buffer[:7]
-                    calculated_xor = functools.reduce(operator.xor, packet[:-1])
-
-                    if calculated_xor == packet[-1]: # Checksum is valid
-                        print(f"  [OK] Packet found with valid checksum: {packet.hex(' ')}")
-                        if packet[1] in [0xCA, 0xCE]: # It's a weight packet
-                            weight_raw = int.from_bytes(packet[2:4], byteorder='big', signed=True)
-                            weight_grams = weight_raw / 10.0
-                            print(f"\n>>> SUCCESS! Decoded Weight: {weight_grams:.1f} g (from raw integer: {weight_raw}) <<<\n")
-                        data_buffer = data_buffer[7:] # Remove processed packet
+                # --- Protocol-Specific Processing ---
+                if protocol_mode == 'text':
+                    text_data = data_buffer.decode('ascii', errors='ignore')
+                    logging.info('text_data buffer: %s', text_data)
+                    lines = text_data.split('\n')
+                    for i in range(len(lines) - 1):
+                        line = lines[i]
+                        if "Weight:" in line:
+                            try:
+                                weight_str = line.split("Weight:")[1].strip()
+                                weight_value = float(weight_str)
+                                logging.info(f">>> SUCCESS! Decoded Weight: {weight_value} <<<")
+                            except (IndexError, ValueError) as e:
+                                logging.warning(f"Could not parse weight from line: '{line}'. Error: {e}")
+                    if lines:
+                        data_buffer = bytearray(lines[-1], 'ascii')
                     else:
-                        print(f"  [FAIL] Packet found but checksum failed. Packet: {packet.hex(' ')}, Expected XOR: {packet[-1]}, Calculated: {calculated_xor}")
-                        data_buffer.pop(0) # Bad checksum, discard the 0x03 byte and search again
+                        data_buffer.clear()
+
+                elif protocol_mode == 'binary':
+                    while len(data_buffer) >= 7:
+                        logging.info('binary data buffer: %s', data_buffer)
+                        start_index = data_buffer.find(0x03)
+                        if start_index == -1:
+                            break 
+                        if start_index > 0:
+                            data_buffer = data_buffer[start_index:]
+                        if len(data_buffer) < 7:
+                            break
+                        
+                        packet = data_buffer[:7]
+                        calculated_xor = functools.reduce(operator.xor, packet[:-1])
+
+                        if calculated_xor == packet[-1]:
+                            logging.info("  [OK] Packet.hex found: %s", {packet.hex(' ')})
+                            if packet[1] in [0xCA, 0xCE]:
+                                weight_raw = int.from_bytes(packet[2:4], byteorder='big', signed=True)
+                                weight_grams = weight_raw / 10.0
+                                logging.info(f"\n>>> SUCCESS! Decoded Weight: {weight_grams:.1f} g <<<\n")
+                            data_buffer = data_buffer[7:]
+                        else:
+                            logging.warning(f"  [FAIL] Checksum failed. Packet: {packet.hex(' ')}")
+                            data_buffer.pop(0)
 
             except usb.core.USBError as e:
-                # A timeout error is expected if the scale doesn't send data continuously.
-                # We check for the error string for cross-platform compatibility.
                 if 'timed out' in str(e).lower():
-                    print("Read timed out, waiting for more data...")
-                    continue  # This is expected, just continue the loop
+                    logging.info("Read timed out, waiting for more data...")
+                    continue
                 else:
-                    print(f"USB Read Error: {e}")
+                    logging.error(f"USB Read Error: {e}")
                     break
     except Exception as e:
         print(f"An error occurred: {e}")
     finally:
         if dev:
+            print("Sending Tare Command Now")
+            tare_command = bytearray.fromhex('03 0F 01 00 00 01 0C')
+            print(f"Sending 'tare_command' command: {tare_command}")
+            dev.write(ep_out.bEndpointAddress, tare_command)
+            print("'tare_command' command sent successfully.")
             print("\nReleasing device.")
             usb.util.dispose_resources(dev)
 
