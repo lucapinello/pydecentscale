@@ -62,9 +62,11 @@ class DecentScale(AsyncioEventLoopThread):
         self.heartbeat_task = None
         self.timestamp = None  # For firmware v1.2+   
 
-         
-        #Constants
-        self.CHAR_READ='0000FFF4-0000-1000-8000-00805F9B34FB'
+        # BLE Characteristics based on the Decent Scale protocol.
+        # The values are derived from the short UUIDs in the JS example:
+        # READ_CHARACTERISTIC: 'fff4'
+        # WRITE_CHARACTERISTIC: '36f5'
+        self.CHAR_READ='0000fff4-0000-1000-8000-00805f9b34fb'
         self.CHAR_WRITE='000036f5-0000-1000-8000-00805f9b34fb'
         
         
@@ -90,19 +92,19 @@ class DecentScale(AsyncioEventLoopThread):
             if self.connected:
                 func(self)
             else:
-                print("Scale is not connected.")
+                logger.warning("Scale is not connected.")
         return is_connected
 
-    async def _find_address(self):
+    async def _find_device(self):
         
         device = await BleakScanner.find_device_by_filter(
         lambda d, ad: d.name and d.name == 'Decent Scale'
         ,timeout=self.timeout)
         
         if device:
-            return device.address
+            return device
         else:
-            print('Error: Scale not found. Trying again...')
+            logger.info('Scale not found.')
     
 
     def calculate_xor(self, data):
@@ -125,18 +127,25 @@ class DecentScale(AsyncioEventLoopThread):
         
         return cmd
 
-    async def _connect(self, address):
-        
+    async def _connect_and_setup(self, address):
+        """
+        Connects to the scale, enables notifications, starts the heartbeat (if configured),
+        and sends an initial command to retrieve scale status (firmware, etc.).
+        This consolidates the entire connection sequence into one async operation.
+        """
         self.client = BleakClient(address)
-        
-        if not self.running:
-            super().start()
-        
-        try:
-            return await self.client.connect(timeout=self.timeout)
-        except Exception as e:
-            print('Error:%s\nTrying again...' %e)
-            return False   
+        await self.client.connect(timeout=self.timeout)
+
+        # Enable notifications to receive data
+        await self.client.start_notify(self.CHAR_READ, self.notification_handler)
+
+        # Start heartbeat loop if enabled
+        if self.enable_heartbeat and not self.heartbeat_task:
+            self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+        # Send a command to get scale info (firmware, battery, etc.)
+        await self.__send(self.led_on_command_grams)
+        await asyncio.sleep(0.5)  # Give time for the notification with info to arrive
         
     async def _disconnect(self):
         return await self.client.disconnect()   
@@ -253,11 +262,11 @@ class DecentScale(AsyncioEventLoopThread):
 
     async def _enable_notification(self):
         await self.client.start_notify(self.CHAR_READ, self.notification_handler)
-        await asyncio.sleep(1)
         
         # Start heartbeat if enabled
-        if self.enable_heartbeat:
+        if self.enable_heartbeat and not self.heartbeat_task:
             self.heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        await asyncio.sleep(0.2) # Short delay to ensure notifications are active
         
              
     async def _disable_notification(self):
@@ -280,24 +289,39 @@ class DecentScale(AsyncioEventLoopThread):
     def disable_notification(self):   
         self.weight=None
         return self.run_coro(self._disable_notification())
- 
-    def find_address(self):   
-        return self.run_coro(self._find_address())
 
+    def find_device(self):
+        """Scan for a Decent Scale and return the BLEDevice object."""
+        return self.run_coro(self._find_device())
+
+    def find_address(self):
+        """Scan for a Decent Scale and return its address.
+        Note: Using find_device() and connecting with the device object is more reliable."""
+        device = self.find_device()
+        if device:
+            return device.address
     
-    def connect(self,address):
-        if not self.connected:
-            self.connected= self.run_coro(self._connect(address))
-            
-            if self.connected:
-                # Turn on LED to get firmware version
-                self.led_on()
-                # Give time for notification response
-                time.sleep(0.5)
-        else:
-            print('Already connected.')
-    
-        return self.connected
+    def connect(self, address):
+        if self.connected:
+            logger.info('Already connected.')
+            return True
+
+        try:
+            # Run the consolidated connection and setup sequence.
+            # We use the address string, which is more reliable across platforms.
+            self.run_coro(self._connect_and_setup(address))
+            self.connected = True
+            return True
+        except Exception:
+            logger.error("Connection failed", exc_info=True)
+            # Ensure we are fully disconnected on failure
+            if self.client and self.client.is_connected:
+                self.run_coro(self.client.disconnect())
+            self.connected = False
+
+        # If we reach here, connection failed.
+        self.connected = False
+        return False
                 
     def disconnect(self):
         if self.connected:
@@ -307,29 +331,29 @@ class DecentScale(AsyncioEventLoopThread):
             
             self.connected = not self.run_coro(self._disconnect())
         else:
-            print('Already disconnected.')
+            logger.info('Already disconnected.')
         
         return not self.connected
             
     def auto_connect(self,n_retries=3):    
-        address = None
-
+        device = None
+        logger.info("Scanning for Decent Scale...")
         for i in range(n_retries):
-            address=self.find_address()
-            if address:
-                print('Found Decent Scale: %s' % address)
+            device = self.find_device()
+            if device:
+                logger.info('Found Decent Scale: %s', device.address)
                 break
             else:
-                print(i)
+                logger.info('Scan attempt %d failed. Retrying...', i + 1)
         
-        if address:        
+        if device:
             for i in range(n_retries):
-                if self.connect(address):
-                    print('Scale connected!')
+                # Use the device's address string for connection, mirroring the working test_bleak.py example.
+                if self.connect(device.address):
                     return True
-                
+                logger.warning('Connection attempt %d failed. Retrying...', i + 1)
         
-        print('Autoconnect failed. Make sure the scale is on.')
+        logger.error('Autoconnect failed. Make sure the scale is on.')
         return False
     
     @check_connection 
@@ -384,4 +408,3 @@ class DecentScale(AsyncioEventLoopThread):
         return {'weight': self.weight, 'timestamp': None}
 
         
-
