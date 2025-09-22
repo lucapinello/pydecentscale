@@ -141,3 +141,4 @@ examples/webusb_app/webserialdemo.py
 examples/webusb_app/webserialdemoO.py
 examples/webusb_app/webserialpage.html
 examples/webusb_app/templates/index.html
+.gemini/settings.json
